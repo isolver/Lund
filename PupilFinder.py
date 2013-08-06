@@ -99,7 +99,7 @@ if __name__ == '__main__':
     cv2.namedWindow('video')
     
     # Just for development, so I don't have to wait so long:
-    numFrames = min(10000, numFrames)
+    numFrames = min(100, numFrames)
     
     # Allocate the memory
     centerPupil = np.nan*np.ones((numFrames,2))
