@@ -28,9 +28,8 @@ from scipy import signal
 
 
 def diff3(x):
-    ''' 3-point differentiation. Note that the result is only proportional to the velocity, as no rate is given '''
     dxdt = zeros(x.shape)
-    dxdt[1:-1, :] = (x[2:, :] - x[:-2, :])/5.
+    dxdt[1:-1, :] = 0.5*(x[2:, :] - x[:-2, :])
     dxdt[[0, -1], :] = dxdt[[1, -2], :]
     return dxdt
 
@@ -110,6 +109,21 @@ def findCenter(frame, threshold):
         
     return (center, threshold)
         
+
+def heatMap (xy):
+    # First calculate the 2D histogram
+    hist2d, xedges, yedges = np.histogram2d(xy[:,1], xy[:,0], bins=(100, 100))
+    # Then blur the histogram
+    filtx = signal.gaussian(31, 31/6.0)
+    filtx = filtx/sum(filtx)
+    filty = filtx
+    hist2d = signal.sepfir2d(hist2d, filtx, filty)
+
+    # Calculate the range / extent    
+    extent = array([amin(xy[:,0]), amax(xy[:,0]), amin(xy[:,1]), amax(xy[:,1])])
+    return (hist2d, extent)
+
+
 def plotAndCalibration(time, centerPupil):
     ''' Plot the data as pts, and then calibrate the data from a pre-recorded calibration-file'''
     
@@ -134,6 +148,61 @@ def plotAndCalibration(time, centerPupil):
     xy = Data['LeftPupilPx']
     calibmat = Data['LeftEyeCal']
     
+    # Calculate the range / extent    
+    t = np.arange(xy.shape[0])/SamplingRate
+    
+    # Plot Nr 3: x/y view of pre-recorded data in pixel, together with clustering information -------------
+    
+    # Heat map; This is just for fun
+    hist2d, ex = heatMap (xy)
+    
+    # First plot the heat map ...
+    plt.subplot(2,2,3)
+    plt.cla()
+    plt.hold(True)
+    plt.imshow(hist2d, origin='lower', extent=ex, cmap='afmhot')
+    plt.contour(hist2d, origin='lower', extent=ex)
+    
+    # ... and then the data and the clustering
+
+    # Cluster analysis of the fixations
+    # Cluster analysis of the fixations
+    ntarget = 5;
+    calibtarget = 8.5; # Laser dots are 8.5 deg apart
+    clust, distortion = kmeans (xy, ntarget)
+    
+    plt.plot(xy[:,0], xy[:,1], '0.8', clust[:,0], clust[:,1], 'ro');
+    plt.ylabel('Vertical [Pixel]')
+    plt.xlabel('Horizontal [Pixel]')
+    plt.hold(False)
+    
+    # Define fixations
+    Cr0 = array(
+            [[0, 0],
+             [0,-1],
+             [0, 1],
+             [-1,0],
+             [1, 0]])
+       
+    imax = np.nanargmax(clust, axis=0)
+    imin = np.nanargmin(clust, axis=0)
+    # Indices of secondary fixations
+    iorder = np.array([imax[1], imin[1], imin[0], imax[0]])
+    # Index of primary fixation
+    imid = setdiff1d(arange(ntarget),iorder)
+    ic0 = concatenate((imid,iorder)) 
+    C = clust[ic0,:]
+    
+    Cr_deg = -Cr0*calibtarget;
+    Cr = tan(-Cr_deg * pi/180)
+    Ce = concatenate((C, ones((C.shape[0],1))), axis=1)
+    
+    # Linear fit; In Matlab it's Cr.T / Ce.T
+    Ch = np.linalg.lstsq(Ce, Cr[:,0])[0]
+    Cv = np.linalg.lstsq(Ce, Cr[:,1])[0]
+    
+    calibmat = np.array([Ch,Cv])
+    
     # Plot nr 2: Pre-recorded calibration data, in deg -----------------------
     # Use the calibration matrix for calibrating the pupil position
     eyeRot = arctan(calibmat.dot(append(xy, ones((xy.shape[0], 1)), 1).T)).T
@@ -142,43 +211,12 @@ def plotAndCalibration(time, centerPupil):
     eyeRotVec = eyeRotVec[:, [0, 2, 1]]
     eyeRotDeg = eyeRot * 180.0 / pi   # Transform to angular degrees
     
-    # Calculate the range / extent    
-    ex = array([amin(xy[:,0]), amax(xy[:,0]), amin(xy[:,1]), amax(xy[:,1])])
-    t = np.arange(xy.shape[0])/SamplingRate
-    
     # Make the plot
     ax1 = plt.subplot(2,2,2)
     plt.plot(t, eyeRotDeg)
     plt.ylabel('Eye Position [deg]')
     plt.xlabel('Time [s]')
 
-    # Plot Nr 3: x/y view of pre-recorded data in pixel, together with clustering information -------------
-    
-    # Heat map; This is just for fun
-    # First calculate the 2D histogram
-    hist2d, xedges, yedges = np.histogram2d(xy[:,0], xy[:,1], bins=(100, 100))
-    # Then blur the histogram
-    filtx = signal.gaussian(15, 15/6.0)
-    filtx = (filtx)/sum(filtx)
-    filty = filtx
-    hist2d = signal.sepfir2d(hist2d, filtx, filty)
-    
-    # First plot the heat map ...
-    plt.subplot(2,2,3)
-    plt.hold(True)
-    plt.imshow(hist2d, origin='lower', extent=ex, cmap='afmhot')
-    plt.contour(hist2d, origin='lower', extent=ex)
-    
-    # ... and then the data and the clustering
-
-    # Cluster analysis of the fixations
-    clust, distortion = kmeans (xy, 5)
-    
-    plt.plot(xy[:,0], xy[:,1], '0.8', clust[:,0], clust[:,1], 'ro');
-    plt.ylabel('Vertical [Pixel]')
-    plt.xlabel('Horizontal [Pixel]')
-    plt.hold(False)
-    
     # Plot Nr. 4: Eye velocity, of pre-recorded calibration data ----------------------------
     
     # compute angular velocities; sampling rate was 220 Hz
@@ -219,7 +257,7 @@ if __name__ == '__main__':
     cv2.namedWindow('video')
     
     # Just for development, so I don't have to wait so long:
-    numFrames = min(100, numFrames)
+    numFrames = min(1000, numFrames)
     
     # Allocate the memory
     centerPupil = np.nan*np.ones((numFrames,2))
